@@ -314,10 +314,27 @@
             top: 20%; left: 50%; transform: translateX(-50%);
             filter: blur(100px); z-index: -1;
         }
-        #particles {
-            position: fixed; top: 0; left: 0;
-            width: 100%; height: 100%; z-index: -2;
+        /* ── ERROR OVERLAY ── */
+        #errorOverlay {
+            position: fixed; inset: 0; z-index: 11000;
+            display: none; align-items: center; justify-content: center;
+            background: rgba(0,0,0,0.75); backdrop-filter: blur(10px);
         }
+        #errorOverlay.active { display: flex; }
+        .error-card {
+            background: rgba(20, 25, 36, 0.95);
+            border: 1px solid rgba(255, 100, 80, 0.3);
+            border-radius: 20px; padding: 36px 40px;
+            max-width: 420px; width: 90%; text-align: center;
+            box-shadow: 0 0 60px rgba(0,0,0,0.6), 0 0 20px rgba(255,80,80,0.08);
+            animation: resultFadeIn 0.3s ease;
+        }
+        .error-icon { font-size: 36px; margin-bottom: 12px; }
+        .error-title { font-size: 20px; font-weight: 500; color: #f87171; margin-bottom: 8px; }
+        .error-body { font-size: 13px; color: rgba(255,255,255,0.5); margin-bottom: 12px; word-break: break-word; }
+        .error-hint { font-size: 12px; color: rgba(255,255,255,0.35); line-height: 1.6; margin-bottom: 24px; }
+        .error-hint strong { color: rgba(255,255,255,0.55); }
+        .error-actions { display: flex; gap: 12px; justify-content: center; }
     </style>
 </head>
 <body>
@@ -414,6 +431,20 @@
     </div>
 </div>
 
+<!-- ERROR OVERLAY -->
+<div id="errorOverlay">
+    <div class="error-card">
+        <div class="error-icon">⚠</div>
+        <div class="error-title">Connection failed</div>
+        <div class="error-body" id="errorMsg">Server took too long to wake up.</div>
+        <p class="error-hint">Render.com free tier sleeps after inactivity — cold start can take up to 90 seconds. Hit <strong>Try again</strong> and wait a moment.</p>
+        <div class="error-actions">
+            <button class="btn-primary" onclick="retryLastRequest()">↺ Try again</button>
+            <button class="btn-ghost" onclick="hideServerError()">Dismiss</button>
+        </div>
+    </div>
+</div>
+
 <!-- LIGHTBOX -->
 <div id="lightbox" onclick="closeLightbox()">
     <span class="lightbox-close" onclick="closeLightbox()">✕</span>
@@ -484,19 +515,36 @@ function cycleStatus() {
 function stopStatusCycle() { if (statusTimer) { clearInterval(statusTimer); statusTimer = null; } }
 
 // ── SERVER POLLING ─────────────────────────────────────────────────────────────
-async function waitForServer(maxWait = 45000) {
+async function waitForServer(maxWait = 90000) {
     const start = Date.now();
+    let attempt = 0;
+
     while (Date.now() - start < maxWait) {
+        attempt++;
+        const elapsed = Math.floor((Date.now() - start) / 1000);
+        const remaining = Math.ceil((maxWait - (Date.now() - start)) / 1000);
+        const el = document.getElementById("statusText");
+
+        // Update status with helpful countdown so user knows it's not frozen
+        if (el) {
+            if (attempt === 1) {
+                el.textContent = "Waking server… this may take up to 90s";
+            } else {
+                el.style.animation = "none"; void el.offsetHeight; el.style.animation = "textFade 0.5s ease";
+                el.textContent = `Still waking server… ${remaining}s remaining`;
+            }
+        }
+
         try {
-            const r = await fetch(API + "/health", { signal: AbortSignal.timeout(5000) });
+            const r = await fetch(API + "/health", { signal: AbortSignal.timeout(8000) });
             if (r.ok) {
-                await fetch(API + "/warmup", { signal: AbortSignal.timeout(15000) }).catch(() => {});
+                if (el) { el.style.animation = "none"; void el.offsetHeight; el.style.animation = "textFade 0.5s ease"; el.textContent = "Server ready — running warmup…"; }
+                await fetch(API + "/warmup", { signal: AbortSignal.timeout(20000) }).catch(() => {});
                 return true;
             }
-        } catch(e) {}
-        const el = document.getElementById("statusText");
-        if (el) el.textContent = "Waking server… please wait";
-        await new Promise(r => setTimeout(r, 2500));
+        } catch(e) { /* server not up yet — keep polling */ }
+
+        await new Promise(r => setTimeout(r, 3000));
     }
     return false;
 }
@@ -637,33 +685,73 @@ function openLightbox(src) {
 function closeLightbox() { document.getElementById("lightbox").classList.remove("active"); }
 document.addEventListener("keydown", e => { if (e.key === "Escape") closeLightbox(); });
 
+// ── SERVER ERROR UI (replaces browser alert) ──────────────────────────────────
+function showServerError(msg) {
+    const overlay = document.getElementById("errorOverlay");
+    document.getElementById("errorMsg").textContent = msg || "Server took too long to wake up.";
+    overlay.classList.add("active");
+}
+function hideServerError() {
+    document.getElementById("errorOverlay").classList.remove("active");
+}
+async function retryLastRequest() {
+    hideServerError();
+    if (!_lastFiles || _lastFiles.length === 0) return;
+    if (_lastFiles.length > 1) {
+        handleMultipleImages(_lastFiles);
+    } else {
+        const file = _lastFiles[0];
+        document.getElementById("menu").style.display = "none"; menuOpen = false;
+        showLoading(); cycleStatus();
+        const formData = new FormData();
+        formData.append("file", file, file.name);
+        try {
+            const ready = await waitForServer(90000);
+            if (!ready) { stopStatusCycle(); hideLoading(); showServerError(); return; }
+            const response = await fetch(API + "/predict", { method: "POST", body: formData });
+            if (!response.ok) throw new Error("Server error " + response.status);
+            const data = await response.json();
+            stopStatusCycle();
+            showResult("data:image/jpeg;base64," + data.image, data.count);
+        } catch (error) {
+            stopStatusCycle(); hideLoading();
+            showServerError(error.message);
+            console.error(error);
+        }
+    }
+}
+
 // ── FILE INPUT ────────────────────────────────────────────────────────────────
+let _lastFiles = null; // kept so retry button can re-submit
+
 document.getElementById("fileInput").addEventListener("change", async function () {
     const files = this.files;
     if (!files || files.length === 0) return;
 
     if (files.length > 1) {
+        _lastFiles = files;
         handleMultipleImages(files);
         this.value = "";
         return;
     }
 
+    _lastFiles = files;
     const file = files[0];
     document.getElementById("menu").style.display = "none"; menuOpen = false;
     showLoading(); cycleStatus();
     const formData = new FormData();
     formData.append("file", file, file.name);
     try {
-        const ready = await waitForServer(45000);
-        if (!ready) { stopStatusCycle(); hideLoading(); alert("Server is taking too long to start. Please try again."); this.value = ""; return; }
+        const ready = await waitForServer(90000);
+        if (!ready) { stopStatusCycle(); hideLoading(); showServerError(); this.value = ""; return; }
         const response = await fetch(API + "/predict", { method: "POST", body: formData });
-        if (!response.ok) throw new Error("Server error: " + response.status);
+        if (!response.ok) throw new Error("Server error " + response.status);
         const data = await response.json();
         stopStatusCycle();
         showResult("data:image/jpeg;base64," + data.image, data.count);
     } catch (error) {
         stopStatusCycle(); hideLoading();
-        alert("Detection failed: " + error.message);
+        showServerError(error.message);
         console.error(error);
     }
     this.value = "";
@@ -675,17 +763,17 @@ async function handleMultipleImages(files) {
     for (let i = 0; i < files.length; i++) formData.append("files", files[i]);
 
     try {
-        const ready = await waitForServer(45000);
-        if (!ready) { stopStatusCycle(); hideLoading(); alert("Server is taking too long to start. Please try again."); return; }
+        const ready = await waitForServer(90000);
+        if (!ready) { stopStatusCycle(); hideLoading(); showServerError(); return; }
 
         const response = await fetch(API + "/predict-multiple", { method: "POST", body: formData });
-        if (!response.ok) throw new Error("Server error: " + response.status);
+        if (!response.ok) throw new Error("Server error " + response.status);
         const data = await response.json();
         stopStatusCycle();
         showBatchResult(data);
     } catch (error) {
         stopStatusCycle(); hideLoading();
-        alert("Batch detection failed: " + error.message);
+        showServerError(error.message);
         console.error(error);
     }
 }
