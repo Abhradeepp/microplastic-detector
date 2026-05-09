@@ -519,10 +519,10 @@ async function waitForServer(maxWait = 90000) {
             }
         }
         try {
-            const r = await fetch(API + "/health", { signal: AbortSignal.timeout(8000) });
+            const r = await fetch(API + "/health", { signal: AbortSignal.timeout(8000), mode: "cors" });
             if (r.ok) {
                 if (el) { el.style.animation = "none"; void el.offsetHeight; el.style.animation = "textFade 0.5s ease"; el.textContent = "Server ready — running warmup…"; }
-                await fetch(API + "/warmup", { signal: AbortSignal.timeout(20000) }).catch(() => {});
+                await fetch(API + "/warmup", { signal: AbortSignal.timeout(20000), mode: "cors" }).catch(() => {});
                 return true;
             }
         } catch(e) { /* keep polling */ }
@@ -562,7 +562,7 @@ async function runSingleDetection(file) {
     try {
         const ready = await waitForServer(90000);
         if (!ready) { stopStatusCycle(); hideLoading(); showServerError(); return; }
-        const response = await fetch(API + "/predict", { method: "POST", body: formData });
+        const response = await fetch(API + "/predict", { method: "POST", body: formData, signal: AbortSignal.timeout(90000), mode: "cors" });
         if (!response.ok) throw new Error("Server error " + response.status);
         const data = await response.json();
         stopStatusCycle();
@@ -611,7 +611,7 @@ async function handleMultipleImages(files) {
     try {
         const ready = await waitForServer(90000);
         if (!ready) { stopStatusCycle(); hideLoading(); showServerError(); return; }
-        const response = await fetch(API + "/predict-multiple", { method: "POST", body: formData });
+        const response = await fetch(API + "/predict-multiple", { method: "POST", body: formData, signal: AbortSignal.timeout(90000), mode: "cors" });
         if (!response.ok) throw new Error("Server error " + response.status);
         const data = await response.json();
         stopStatusCycle();
@@ -695,31 +695,31 @@ document.getElementById("fileInput").addEventListener("change", async function (
     this.value = "";
 });
 
-// ── BACKGROUND PARTICLES ──────────────────────────────────────────────────────
+// ===== BACKGROUND PARTICLES =====
 const bgCanvas = document.getElementById("particles");
-const bgCtx    = bgCanvas.getContext("2d");
+const bgCtx = bgCanvas.getContext("2d");
 bgCanvas.width = window.innerWidth; bgCanvas.height = window.innerHeight;
 window.addEventListener("resize", () => { bgCanvas.width = window.innerWidth; bgCanvas.height = window.innerHeight; });
 
 class BgParticle {
     constructor() { this.reset(); }
     reset() {
-        this.x = Math.random()*bgCanvas.width; this.y = Math.random()*bgCanvas.height;
-        this.size = Math.random()*2.5+0.5;
-        this.speedX = (Math.random()-0.5)*0.6; this.speedY = (Math.random()-0.5)*0.6;
+        this.x = Math.random() * bgCanvas.width; this.y = Math.random() * bgCanvas.height;
+        this.size = Math.random() * 2.5 + 0.5;
+        this.speedX = (Math.random() - 0.5) * 0.6; this.speedY = (Math.random() - 0.5) * 0.6;
         this.color = ["#00D4FF","#00FFA3","#FF4D6D"][Math.floor(Math.random()*3)];
     }
     update() {
         this.x += this.speedX; this.y += this.speedY;
-        if (this.x>bgCanvas.width||this.x<0) this.speedX*=-1;
-        if (this.y>bgCanvas.height||this.y<0) this.speedY*=-1;
+        if (this.x > bgCanvas.width || this.x < 0) this.speedX *= -1;
+        if (this.y > bgCanvas.height || this.y < 0) this.speedY *= -1;
     }
     draw() {
-        bgCtx.beginPath(); bgCtx.arc(this.x,this.y,this.size,0,Math.PI*2);
-        bgCtx.fillStyle=this.color; bgCtx.shadowBlur=12; bgCtx.shadowColor="#00D4FF"; bgCtx.fill();
+        bgCtx.beginPath(); bgCtx.arc(this.x, this.y, this.size, 0, Math.PI*2);
+        bgCtx.fillStyle = this.color; bgCtx.shadowBlur = 12; bgCtx.shadowColor = "#00D4FF"; bgCtx.fill();
     }
 }
-const bgParticles = Array.from({length:100}, ()=>new BgParticle());
+const bgParticles = Array.from({length:100}, () => new BgParticle());
 (function animateBg() { bgCtx.clearRect(0,0,bgCanvas.width,bgCanvas.height); bgParticles.forEach(p=>{p.update();p.draw();}); requestAnimationFrame(animateBg); })();
 
 // ── 3D SPHERE ─────────────────────────────────────────────────────────────────
